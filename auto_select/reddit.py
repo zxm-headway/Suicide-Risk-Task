@@ -24,11 +24,13 @@ from sklearn.metrics import precision_score, recall_score, f1_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 import xgboost as xgb
+from scipy.stats import zscore
 import model_adfs as ADFS
 from sklearn.metrics import accuracy_score
 from gensim.models.ldamodel import LdaModel
 from gensim import corpora
 from tools import utils
+
 
 
 # 读取数据
@@ -127,9 +129,10 @@ def f_pos(data, tags_all):
 
   pd.DataFrame(tag_count_body, index=None).to_csv('tag_count_body.csv', index=False)
   df = pd.DataFrame(tag_count_body, index=None)
+  # log_df = df.apply(zscore)
   log_df = df.apply(log_normalize)
   # log_df = df.apply(min_max_normalize)
-  # log_df.to_csv('log_tag_count_body.csv', index=False)
+#   log_df.to_csv('log_tag_count_body.csv', index=False)
   return log_df
   # return df
 
@@ -156,6 +159,8 @@ def get_ifidf_features(data):
     
   
   # 得到vadder的情绪分析
+
+
 def get_emotion_features(data):
 
     print("Processing emotion features ...")
@@ -187,20 +192,28 @@ if __name__ == '__main__':
     reddit = utils.load_df('reddit_500')
     
     # 提取统计句子，词汇特征
-    satisc_data = get_satisc_features(reddit)
-    # 提取词性标定（POS）
+    # satisc_data = get_satisc_features(reddit)
+    # # 提取词性标定（POS）
     
-    tags_all = get_all_tags(reddit)
-    # 提取词性标定（POS）
-    pos_data = f_pos(reddit, tags_all)
+    # tags_all = get_all_tags(reddit)
+    # # 提取词性标定（POS）
+    # pos_data = f_pos(reddit, tags_all)
 
-    # 提取统计句子，词汇特征
-    ifidf_data = get_ifidf_features(reddit)
+    # # 提取统计句子，词汇特征
+    # ifidf_data = get_ifidf_features(reddit)
 
-    # 提取情感特征
-    emotion_data = get_emotion_features(reddit)
+    # # 提取情感特征
+    # emotion_data = get_emotion_features(reddit)
 
-    features = pd.concat([satisc_data, pos_data,ifidf_data,emotion_data], axis=1)
+    # features = pd.concat([pos_data,ifidf_data,emotion_data], axis=1)
+
+    # features.to_csv('S_P_F_E_features.csv', index=False)
+
+    # features.to_csv('P_F_E_features.csv', index=False)
+
+    features = pd.read_csv('./S_P_F_E_features.csv')
+
+
     
     inpus_dim = {
         'satisc_data': 3,
@@ -227,11 +240,13 @@ if __name__ == '__main__':
 
     # 5折交叉验证
     # skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
-    # 用svm分类器
-    # model = LogisticRegression()
+    # # 用svm分类器
+    # # model = LogisticRegression()
+    # # model = GradientBoostingClassifier(n_estimators=100, learning_rate=1.0,max_depth=1, random_state=0)
 
-    #
-    # model= RandomForestClassifier(n_estimators=20, max_depth=8, random_state=0)
+    # # 用随机森林分类器
+    # model = RandomForestClassifier(n_estimators=20, max_depth=8, random_state=0)
+
 
     train_data, test_data, train_labels, test_labels = train_test_split(X, Y, test_size=0.2, random_state=42,stratify=Y)
     train_dataset = ADFS.CustomDataset(train_data, train_labels)
@@ -247,10 +262,8 @@ if __name__ == '__main__':
     # 定义损失函数和优化器
     criterion = nn.CrossEntropyLoss()
     # model = ADFS.MLP(input_dim=INPUTS)
-
-
-
-    model = ADFS.AdaFS_soft(input_dims=INPUTS,inputs_dim=inpus_dim,num=num )
+    # model = ADFS.AdaFS_soft(input_dims=INPUTS,inputs_dim=inpus_dim,num=num )
+    model = ADFS.MvFS_MLP(input_dims=INPUTS,inputs_dim=inpus_dim,nums=num,num_selections=3)
     model = model.cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001,weight_decay=1e-6)
 
@@ -261,7 +274,8 @@ if __name__ == '__main__':
             data, labels = data.cuda(), labels.cuda()
             optimizer.zero_grad()
             outputs = model(data.float())
-            loss = criterion(outputs, labels)
+            # loss = criterion(outputs, labels)
+            loss = utils.loss_function(outputs, labels, loss_type='OE')
             loss.backward()
             optimizer.step()
         print('Epoch: %d, Loss: %.5f' % (epoch, loss.item()))
@@ -275,7 +289,8 @@ if __name__ == '__main__':
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
         accuracy = 100 * correct / total
-        # print('Accuracy: %.3f %%' % accuracy)
+        # f1 = f1_score(labels.cpu().detach().numpy(), predicted.cpu().detach().numpy(),average='weighted')
+        print('Accuracy: %.3f %%' % accuracy)
         if not is_early_stopping.is_continuable(model, accuracy):
             break
         
@@ -318,20 +333,15 @@ if __name__ == '__main__':
     
 
     
-    accs = []
-    prrcision = []
-    recall = []
-    f1s = []
+    # accs = []
+    # prrcision = []
+    # recall = []
+    # f1s = []
 
-    GP = []
-    GR = []
-    FS = []
+    # GP = []
+    # GR = []
+    # FS = []
     
-
-    
-
-
-
 
     # for train_index, test_index in skf.split(X, Y):
         

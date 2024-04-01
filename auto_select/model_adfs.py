@@ -1,10 +1,26 @@
-from torchfm.layer import CrossNetwork, FeaturesEmbedding, MultiLayerPerceptron
+from torchfm.layer import CrossNetwork, FeaturesEmbedding
 import torch.nn.functional as F
 import torch.nn as nn
 import torch
 from torch.utils.data import TensorDataset, DataLoader, Dataset
 import numpy as np
 
+
+class SelectionNetwork(nn.Module):
+    def __init__(self, input_dims, num):
+        super(SelectionNetwork, self).__init__()
+        self.num = num
+        #  得到评分
+        self.mlp =  MultiLayerPerceptron1(input_dim=input_dims,embed_dims=[input_dims//2,self.num], output_layer=False, dropout=0.2)
+        self.weight_init(self.mlp)
+                                        
+    def forward(self, input_mlp):
+        output_layer = self.mlp(input_mlp)
+        return torch.softmax(output_layer, dim=1)
+    def weight_init(self,m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_normal_(m.weight)
+            nn.init.constant_(m.bias, 0)
 
 
 
@@ -200,7 +216,90 @@ class CustomDataset(Dataset):
     def __getitem__(self, idx):
         return torch.tensor(self.data[idx], dtype=torch.float), torch.tensor(self.labels[idx], dtype=torch.long)
 
-# 基于mvfs的特征选择方法，混合专家模型
 
-class MVFS(nn.Module):
-    pass
+
+
+
+class MvFS_Controller(nn.Module):
+    # embed_dims是字段的长度，也就是有多少字段，每个元素表示对应字段的重要性
+    def __init__(self, input_dim, nums, num_selections):
+        super().__init__()
+        self.inputdim = input_dim
+        self.nums=nums
+        # 专家评估网络的数量
+        self.num_selections = num_selections
+        self.T = 1
+        # 决定每个子网络的重要性
+        self.gate = nn.Sequential(nn.Linear(self.nums * num_selections , num_selections))
+        # 子网络
+        self.SelectionNetworks = nn.ModuleList([SelectionNetwork(input_dim, self.nums) for i in range(num_selections)])
+
+
+    def forward(self, inputs):
+
+        input_mlp = inputs
+
+        # 保存每个专家网络对于文本特征的重要性评估
+        importance_list= []
+        for i in range(self.num_selections):
+            importance_vector = self.SelectionNetworks[i](input_mlp)
+            importance_list.append(importance_vector)
+
+         
+        gate_input = torch.cat(importance_list, 1)
+        selection_influence = self.gate(gate_input)
+        selection_influence = torch.sigmoid(selection_influence)
+        scores = None
+        for i in range(self.num_selections):
+            score = torch.mul(importance_list[i], selection_influence[:,i].unsqueeze(1))
+            if i == 0 :
+                scores = score
+            else:
+                scores = torch.add(scores, score)
+                        
+        scores = 0.5 * (1+ torch.tanh(self.T*(scores-0.1)))
+        
+        if self.T < 5:
+            self.T += 0.001
+        return scores
+    
+
+
+# 基于mvfs的特征选择方法，混合专家模型
+class MvFS_MLP(nn.Module): 
+    def __init__(self,input_dims, nums,inputs_dim, num_selections):
+        super().__init__()
+        self.nums = nums
+        self.inputs_dim = inputs_dim
+        self.input_dim = input_dims
+        self.num_selections = num_selections
+        self.mlp = MultiLayerPerceptron1(input_dim=input_dims, embed_dims=[self.input_dim//2,5], output_layer=False, dropout=0.2)
+        self.controller = MvFS_Controller(input_dim=self.input_dim,nums=self.nums, num_selections= self.num_selections)
+        self.weight = 0
+        self.stage = 1 
+       
+
+    def forward(self, input):
+        field = input
+        if self.stage == 1: # use controller
+            self.weight = self.controller(input)
+            # 进行按权重分配权重
+            field1 = field.clone()
+            self.dims = []
+            for k,v in self.inputs_dim.items():
+                self.dims.append(v)
+            offsets = np.array((0, *np.cumsum(self.dims)[:-1]), dtype=np.int64)
+            # print(offsets,'offsets')
+
+            # print(self.weight.shape,'weight')
+            field1 = field.clone()
+            for i in range(len(offsets)-1):
+                field1[:, offsets[i]:offsets[i+1]] = field[:, offsets[i]:offsets[i+1]] * self.weight[:,i].unsqueeze(1)
+        else: # only backbone 
+            input_mlp = input
+
+        
+        input_mlp = field1
+        res = self.mlp(input_mlp)
+
+        return res
