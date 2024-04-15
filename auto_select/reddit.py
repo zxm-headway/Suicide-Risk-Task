@@ -74,12 +74,14 @@ def get_satisc_features(data):
     features = {'pos_token': num_pos_token,'pos_sent': num_pos_sent,'pos_words': num_pos_words}
     df =  pd.DataFrame(features, columns=['pos_token', 'pos_sent', 'pos_words'])
     # 对 DataFrame 的每列应用归一化
-    normalized_df = df.apply(log_normalize)
+    zscore_df = df.apply(zscore)
+    # normalized_df = df.apply(log_normalize)
     # normalized_df = df.apply(min_max_normalize)
     # normalized_df.to_csv('features.csv', index=False)
     # df.to_csv('features.csv', index=False)
 
-    return normalized_df
+    # return normalized_df
+    return zscore_df
     # return df
 
 
@@ -89,7 +91,6 @@ def get_all_tags(data):
     print("Processing POS features ...")
     tags_all = []
     punctuation1 = set(string.punctuation)
-
     for tags in data['Post']:
         for body in string_list(tags):
           body = "".join(pos for pos in body if pos not in punctuation1)
@@ -97,9 +98,6 @@ def get_all_tags(data):
           for word, tag in tagged_text:
               if tag not in tags_all:
                   tags_all.append(tag)
-    # 得到的tags_all是一个列表，里面包含了所有的词性标记
-    # print(len(tags_all))
-    # print(tags_all)
     return tags_all
 
 
@@ -129,7 +127,7 @@ def f_pos(data, tags_all):
 
   pd.DataFrame(tag_count_body, index=None).to_csv('tag_count_body.csv', index=False)
   df = pd.DataFrame(tag_count_body, index=None)
-  # log_df = df.apply(zscore)
+#   log_df = df.apply(zscore)
   log_df = df.apply(log_normalize)
   # log_df = df.apply(min_max_normalize)
 #   log_df.to_csv('log_tag_count_body.csv', index=False)
@@ -147,6 +145,10 @@ def get_ifidf_features(data):
     count_vect = CountVectorizer(stop_words='english', ngram_range=(1, 1), max_features=50)
     X_counts = count_vect.fit_transform(X)
     word = count_vect.get_feature_names_out()
+
+    # 将word词保存到CSV文件
+    pd.DataFrame(word).to_csv('word.csv', index=False)
+
     tfidf_transformer = TfidfTransformer()
     X_tfidf = tfidf_transformer.fit_transform(X_counts)
     # 将稀疏矩阵转换为稠密矩阵，并创建DataFrame
@@ -184,6 +186,57 @@ def get_emotion_features(data):
     # df.to_csv('emotion_features.csv', index=False)
     return df
 
+
+
+
+# 得到自杀字典统计特征
+def get_sd_features(data):
+    print("Processing sd features ...")
+    sd = utils.load_SD()
+    # 创建自杀自杀字典
+    sd_dict = {}
+    sd_df = {}
+    lemmatize = WordNetLemmatizer()
+    for label in sd['lexicon']:
+       if label not in sd_dict:
+           label = lemmatize.lemmatize(label.lower())
+           sd_dict[label] = 0
+           sd_df[label] = []
+      
+    for posts in data['Post']:
+        for post in string_list(posts):
+            for word in nltk.word_tokenize(post):
+                word = lemmatize.lemmatize(word.lower())
+                if word in sd_dict:
+                    sd_dict[word] += 1
+            
+        for k,v in sd_dict.items():
+            sd_df[k].append(v)
+            sd_dict[k] = 0
+        
+
+    df = pd.DataFrame(sd_df, index=None)
+    # return df
+
+    # 按照a、b、c、d进行类别上的统计
+    # df.to_csv('sd_features.csv', index=False)
+
+    indices_a = sd[sd['computer'].str.contains('a', na=False)].index
+    indices_b = sd[sd['computer'].str.contains('b', na=False)].index
+    indices_c = sd[sd['computer'].str.contains('c', na=False)].index
+    indices_d = sd[sd['computer'].str.contains('d', na=False)].index
+
+    sd_a = df.iloc[:, indices_a].sum(axis=1)
+    sd_b = df.iloc[:, indices_b].sum(axis=1)
+    sd_c = df.iloc[:, indices_c].sum(axis=1)
+    sd_d = df.iloc[:, indices_d].sum(axis=1)
+
+    sd_features = pd.DataFrame({'sd_a': sd_a, 'sd_b': sd_b, 'sd_c': sd_c, 'sd_d': sd_d})
+    sd_features = sd_features.apply(log_normalize)
+    # sd_features.to_csv('sd_ABCD_features.csv', index=False)
+    return sd_features
+
+
 if __name__ == '__main__':
     seed=43
     print(seed)
@@ -192,34 +245,44 @@ if __name__ == '__main__':
     reddit = utils.load_df('reddit_500')
     
     # 提取统计句子，词汇特征
-    # satisc_data = get_satisc_features(reddit)
-    # # 提取词性标定（POS）
+    satisc_data = get_satisc_features(reddit)
+    # 提取词性标定（POS）
     
-    # tags_all = get_all_tags(reddit)
-    # # 提取词性标定（POS）
-    # pos_data = f_pos(reddit, tags_all)
+    tags_all = get_all_tags(reddit)
+    # 提取词性标定（POS）
+    pos_data = f_pos(reddit, tags_all)
 
-    # # 提取统计句子，词汇特征
-    # ifidf_data = get_ifidf_features(reddit)
+    # 提取统计句子，词汇特征
+    ifidf_data = get_ifidf_features(reddit)
 
-    # # 提取情感特征
-    # emotion_data = get_emotion_features(reddit)
+    # 提取情感特征
+    emotion_data = get_emotion_features(reddit)
 
-    # features = pd.concat([pos_data,ifidf_data,emotion_data], axis=1)
+    # sd_features = get_sd_features(reddit)
+
+
+    # features = pd.concat([ pos_data,ifidf_data,emotion_data,], axis=1)
+    features = pd.concat([ pos_data,ifidf_data,emotion_data,], axis=1)
+
 
     # features.to_csv('S_P_F_E_features.csv', index=False)
 
+    # features.to_csv('./sdf.csv', index=False)
     # features.to_csv('P_F_E_features.csv', index=False)
 
-    features = pd.read_csv('./S_P_F_E_features.csv')
+    # features = pd.read_csv('./sdf.csv')
 
 
     
     inpus_dim = {
-        'satisc_data': 3,
+        # 'satisc_data': 3,
+
         'pos_data': 36,
         'ifidf_data': 50,
         'emotion_data': 4,
+        # 'sd_features': 4,
+
+
     }
 
     num = len(inpus_dim)
@@ -231,7 +294,8 @@ if __name__ == '__main__':
     # features = get_emotion_features(reddit)
 
     df_all = pd.concat([features, reddit['Label']], axis=1)
-    df_all.to_csv('features.csv', index=False)
+    # df_all = pd.read_csv('./features_tf_50.csv')
+    # df_all.to_csv('features_tf_50.csv', index=False)
     # print(df_all)
     # print(features.shape)
 
@@ -242,12 +306,18 @@ if __name__ == '__main__':
     # skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
     # # 用svm分类器
     # # model = LogisticRegression()
-    # # model = GradientBoostingClassifier(n_estimators=100, learning_rate=1.0,max_depth=1, random_state=0)
+    # model = GradientBoostingClassifier(n_estimators=100, learning_rate=1.0,max_depth=1, random_state=0)
+
+    # # 用xgboost分类器
+    # model = xgb.XGBClassifier(objective="multi:softmax", n_estimators=100, learning_rate=0.1, max_depth=6, random_state=0)
+
+
+
 
     # # 用随机森林分类器
     # model = RandomForestClassifier(n_estimators=20, max_depth=8, random_state=0)
 
-
+    
     train_data, test_data, train_labels, test_labels = train_test_split(X, Y, test_size=0.2, random_state=42,stratify=Y)
     train_dataset = ADFS.CustomDataset(train_data, train_labels)
     test_dataset = ADFS.CustomDataset(test_data, test_labels)
@@ -262,13 +332,20 @@ if __name__ == '__main__':
     # 定义损失函数和优化器
     criterion = nn.CrossEntropyLoss()
     # model = ADFS.MLP(input_dim=INPUTS)
+    model = ADFS.AFS_ZXM(input_dims=INPUTS,inputs_dim=inpus_dim)
     # model = ADFS.AdaFS_soft(input_dims=INPUTS,inputs_dim=inpus_dim,num=num )
-    model = ADFS.MvFS_MLP(input_dims=INPUTS,inputs_dim=inpus_dim,nums=num,num_selections=3)
+    # model = ADFS.MvFS_MLP(input_dims=INPUTS,inputs_dim=inpus_dim,nums=num,num_selections=6)
     model = model.cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001,weight_decay=1e-6)
 
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=0.0001,weight_decay=1e-6)
+
+    # weight = torch.tensor([1,1,0.5,1,2]).cuda()
+
+    # ct = utils.FocalLoss(weight, gamma=0.5)
+
     # 训练模型
-    for epoch in range(400):
+    for epoch in range(300):
         model.train()
         for i, (data, labels) in enumerate(train_loader):
             data, labels = data.cuda(), labels.cuda()
@@ -276,6 +353,7 @@ if __name__ == '__main__':
             outputs = model(data.float())
             # loss = criterion(outputs, labels)
             loss = utils.loss_function(outputs, labels, loss_type='OE')
+            # loss = ct(outputs, labels)
             loss.backward()
             optimizer.step()
         print('Epoch: %d, Loss: %.5f' % (epoch, loss.item()))
@@ -302,6 +380,7 @@ if __name__ == '__main__':
 
     fin_targets = []
     fin_outputs = []
+
 
     for data, labels in test_loader:
         data, labels = data.cuda(), labels.cuda()
@@ -333,45 +412,45 @@ if __name__ == '__main__':
     
 
     
-    # accs = []
-    # prrcision = []
-    # recall = []
-    # f1s = []
+#     accs = []
+#     prrcision = []
+#     recall = []
+#     f1s = []
 
-    # GP = []
-    # GR = []
-    # FS = []
+#     GP = []
+#     GR = []
+#     FS = []
     
 
-    # for train_index, test_index in skf.split(X, Y):
+#     for train_index, test_index in skf.split(X, Y):
         
-    #     # fin_targets = []
-    #     # fin_outputs = []
-    #     X_train, X_test = X[train_index], X[test_index]
-    #     Y_train, Y_test = Y[train_index], Y[test_index]
-    #     model.fit(X_train, Y_train)
-    #     Y_pred = model.predict(X_test)
-    #     acc = accuracy_score(Y_test, Y_pred)
-    #     pr = precision_score(Y_test, Y_pred,average='weighted')
-    #     rc = recall_score(Y_test, Y_pred,average='weighted')
-    #     f1 = f1_score(Y_test, Y_pred,average='weighted')
+#         # fin_targets = []
+#         # fin_outputs = []
+#         X_train, X_test = X[train_index], X[test_index]
+#         Y_train, Y_test = Y[train_index], Y[test_index]
+#         model.fit(X_train, Y_train)
+#         Y_pred = model.predict(X_test)
+#         acc = accuracy_score(Y_test, Y_pred)
+#         pr = precision_score(Y_test, Y_pred,average='weighted')
+#         rc = recall_score(Y_test, Y_pred,average='weighted')
+#         f1 = f1_score(Y_test, Y_pred,average='weighted')
 
-    #     GP = utils.gr_metrics(Y_pred, Y_test)[0]
-    #     GR = utils.gr_metrics(Y_pred, Y_test)[1]
-    #     FS = utils.gr_metrics(Y_pred, Y_test)[2]
+#         GP = utils.gr_metrics(Y_pred, Y_test)[0]
+#         GR = utils.gr_metrics(Y_pred, Y_test)[1]
+#         FS = utils.gr_metrics(Y_pred, Y_test)[2]
 
 
-    #     accs.append(acc)
-    #     prrcision.append(pr)
-    #     recall.append(rc)
-    #     f1s.append(f1)
+#         accs.append(acc)
+#         prrcision.append(pr)
+#         recall.append(rc)
+#         f1s.append(f1)
 
-    # print('Accuracy:', np.mean(accs))
-    # print('Precision:', np.mean(prrcision))
-    # print('Recall:', np.mean(recall))
-    # print('F1:', np.mean(f1s))
+#     print('Accuracy:', np.mean(accs))
+#     print('Precision:', np.mean(prrcision))
+#     print('Recall:', np.mean(recall))
+#     print('F1:', np.mean(f1s))
 
-    # print('GP:', np.mean(GP))
-    # print('GR:', np.mean(GR))
-    # print('FS:', np.mean(FS))
-# 21
+#     print('GP:', np.mean(GP))
+#     print('GR:', np.mean(GR))
+#     print('FS:', np.mean(FS))
+# # 21

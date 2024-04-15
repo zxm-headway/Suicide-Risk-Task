@@ -7,7 +7,7 @@ import numpy as np
 
 
 class SelectionNetwork(nn.Module):
-    def __init__(self, input_dims, num):
+    def __init__(self, input_dims,num):
         super(SelectionNetwork, self).__init__()
         self.num = num
         #  得到评分
@@ -22,6 +22,25 @@ class SelectionNetwork(nn.Module):
             nn.init.xavier_normal_(m.weight)
             nn.init.constant_(m.bias, 0)
 
+
+class FinedNetwork(nn.Module):
+    def __init__(self, input_dims):
+        super(FinedNetwork, self).__init__()
+        # self.num = num
+        #  得到评分
+        # 在文本特征内部做交叉
+        # self.cn = CrossNetwork(input_dim=input_dims,num_layers=2)
+        self.mlp =  MultiLayerPerceptron1(input_dim=input_dims,embed_dims=[input_dims,64,input_dims], output_layer=False, dropout=0.2)
+        self.weight_init(self.mlp)
+                                        
+    def forward(self, input_mlp):
+        # input_mlp = self.cn(input_mlp)
+        output_layer = self.mlp(input_mlp)
+        return torch.softmax(output_layer, dim=1)
+    def weight_init(self,m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_normal_(m.weight)
+            nn.init.constant_(m.bias, 0)
 
 
 class EarlyStopping(object):
@@ -84,7 +103,7 @@ class MLP(nn.Module):
         # self.cn = CrossNetwork(input_dim=self.embed_dim,num_layers=2)
         self.mlp = MultiLayerPerceptron1(input_dim=self.embed_dim,embed_dims=[self.embed_dim//2,5], output_layer=False, dropout=0.2)
         # self.linear = torch.nn.Linear(self.embed_dim*2, 5)
-        self.BN = nn.BatchNorm1d(self.embed_dim)
+        # self.BN = nn.BatchNorm1d(self.embed_dim)
         self.weight_init(self.mlp)
 
     def weight_init(self,m):
@@ -93,10 +112,7 @@ class MLP(nn.Module):
             nn.init.constant_(m.bias, 0)
 
     def forward(self,input):
-        # field = self.BN(input)
-        # field = self.cn(input)
-        
-        
+        # input = self.BN(input)
         res = self.mlp(input)
         # res = torch.cat([field, res], dim=1)
         # res = self.linear(res)
@@ -112,7 +128,7 @@ class controller_mlp(nn.Module):
         super().__init__()
         self.inputdim = input_dim
         self.mlp = MultiLayerPerceptron1(input_dim=self.inputdim, embed_dims=[64,32,nums], output_layer=False, dropout=0.2)
-        # self.weight_init(self.mlp)
+        self.weight_init(self.mlp)
     
     def forward(self, emb_fields):
         # input_mlp = emb_fields.flatten(start_dim=1).float()
@@ -139,7 +155,7 @@ class AdaFS_soft(nn.Module):
         self.useBN = False
         self.inputs_dim = inputs_dim
         self.UseController = True
-        # self.BN = nn.BatchNorm1d(self.embed_dim)
+        self.BN = nn.BatchNorm1d(self.embed_dim)
         self.stage = 1
 
 
@@ -151,12 +167,13 @@ class AdaFS_soft(nn.Module):
             self.dims = []
             for k,v in self.inputs_dim.items():
                 self.dims.append(v)
-            offsets = np.array((0, *np.cumsum(self.dims)[:-1]), dtype=np.int64)
+            offsets = np.cumsum(self.dims).tolist()
+            offsets = [0] + offsets
             field1 = field.clone()
             for i in range(len(offsets)-1):
                 field1[:, offsets[i]:offsets[i+1]] = field[:, offsets[i]:offsets[i+1]] * self.weight[:,i].unsqueeze(1)
-        res = self.mlp(field1)
-        return res
+            res = self.mlp(field1)
+            return res
 
 
 def kmax_pooling(x, dim, k):
@@ -226,17 +243,18 @@ class MvFS_Controller(nn.Module):
         super().__init__()
         self.inputdim = input_dim
         self.nums=nums
-        # 专家评估网络的数量
+        # 专家评估网络的数量n
         self.num_selections = num_selections
         self.T = 1
+        self.b = 5
         # 决定每个子网络的重要性
         self.gate = nn.Sequential(nn.Linear(self.nums * num_selections , num_selections))
         # 子网络
-        self.SelectionNetworks = nn.ModuleList([SelectionNetwork(input_dim, self.nums) for i in range(num_selections)])
+        self.SelectionNetworks = nn.ModuleList([SelectionNetwork(input_dim,self.nums) for i in range(num_selections)])
 
 
     def forward(self, inputs):
-
+        # self.T = epoch
         input_mlp = inputs
 
         # 保存每个专家网络对于文本特征的重要性评估
@@ -257,10 +275,14 @@ class MvFS_Controller(nn.Module):
             else:
                 scores = torch.add(scores, score)
                         
-        scores = 0.5 * (1+ torch.tanh(self.T*(scores-0.1)))
-        
-        if self.T < 5:
-            self.T += 0.001
+        # scores = 0.5 * (1+ torch.tanh(self.T*(scores-0.1)))
+        scores = scores / self.num_selections
+        scores = torch.softmax(scores, dim=1)
+
+        # self.b = max(5, 1+0.01*self.T)
+
+        # scores = torch.sigmoid(scores)
+    
         return scores
     
 
@@ -275,6 +297,9 @@ class MvFS_MLP(nn.Module):
         self.num_selections = num_selections
         self.mlp = MultiLayerPerceptron1(input_dim=input_dims, embed_dims=[self.input_dim//2,5], output_layer=False, dropout=0.2)
         self.controller = MvFS_Controller(input_dim=self.input_dim,nums=self.nums, num_selections= self.num_selections)
+        self.UseController = True
+        self.useBN = False
+        self.BN = nn.BatchNorm1d(self.input_dim)
         self.weight = 0
         self.stage = 1 
        
@@ -282,16 +307,18 @@ class MvFS_MLP(nn.Module):
     def forward(self, input):
         field = input
         if self.stage == 1: # use controller
+
+            if self.useBN == True:
+                field = self.BN(field)
+
             self.weight = self.controller(input)
             # 进行按权重分配权重
             field1 = field.clone()
             self.dims = []
             for k,v in self.inputs_dim.items():
                 self.dims.append(v)
-            offsets = np.array((0, *np.cumsum(self.dims)[:-1]), dtype=np.int64)
-            # print(offsets,'offsets')
-
-            # print(self.weight.shape,'weight')
+            offsets = np.cumsum(self.dims).tolist()
+            offsets = [0] + offsets
             field1 = field.clone()
             for i in range(len(offsets)-1):
                 field1[:, offsets[i]:offsets[i+1]] = field[:, offsets[i]:offsets[i+1]] * self.weight[:,i].unsqueeze(1)
@@ -303,3 +330,72 @@ class MvFS_MLP(nn.Module):
         res = self.mlp(input_mlp)
 
         return res
+
+
+
+class FinedController(nn.Module):
+    def __init__(self, inputs_dim):
+        super().__init__()
+        self.inputs_dim = inputs_dim
+        self.fined_length = len(inputs_dim)
+        print(self.fined_length)
+        self.fined_class = nn.ModuleList(FinedNetwork(input_dims=inputs_dim[i]) for i in range(self.fined_length))
+
+    def forward(self, inputs):
+        # input_mlp = inputs
+        importance_list= []
+        offsets = np.cumsum(self.inputs_dim).tolist()
+        offsets = [0] + offsets
+        for i in range(len(offsets)-1):
+            importance_vector = self.fined_class[i](inputs[:, offsets[i]:offsets[i+1]])
+            importance_list.append(importance_vector)
+        return torch.cat(importance_list, 1)
+
+
+# 针对每个字段进行特征选择---即对每个字段内进行特征选择
+class AFS_ZXM(nn.Module):
+    def __init__(self, input_dims, inputs_dim):
+        super().__init__()
+        # self.num = nums
+        self.inputs_dim = inputs_dim
+        self.get_dims()
+        self.embed_dim = input_dims
+
+        # self.cn = CrossNetwork(input_dim=self.embed_dim,num_layers=1)
+        self.mlp = MultiLayerPerceptron1(input_dim=self.embed_dim, embed_dims=[self.embed_dim//2,5], output_layer=False, dropout=0.2)
+        self.Finedcontroller = FinedController(self.dims)
+        self.Adacontroller = controller_mlp(input_dim=self.embed_dim, nums=len(self.dims))
+        # self.Liner = nn.Linear(self.embed_dim*2, self.embed_dim)
+        # self.mvfs =  MvFS_Controller(input_dim=self.embed_dim,nums=len(self.dims), num_selections= 1)
+        self.UseController = True
+        self.weight = 0
+        self.useBN = False
+        self.stage = 1
+
+    def get_dims(self):
+        self.dims = []
+        for k,v in self.inputs_dim.items():
+            self.dims.append(v)
+    
+    def forward(self, field):
+        if self.useBN == True:
+            field = self.BN(field)
+        if self.UseController and self.stage == 1:
+            # input_mlp = self.cn(field)
+            # field = torch.cat([field, input_mlp], dim=1)
+            # field = self.Liner(field)
+            weight = self.Finedcontroller(field)
+            # weight = self.Finedcontroller(input_mlp)
+
+            input_mlp = field  * weight
+            # input_mlp = self.cn(input_mlp)
+            weight1 = self.Adacontroller(input_mlp)
+            # weight1 = self.mvfs(input_mlp)
+            offsets = np.cumsum(self.dims).tolist()
+            offsets = [0] + offsets
+            field1 = field.clone()
+            for i in range(len(offsets)-1):
+                field1[:, offsets[i]:offsets[i+1]] = field[:, offsets[i]:offsets[i+1]] * weight1[:,i].unsqueeze(1)
+            # field1 = self.cn(field1)
+            res = self.mlp(field1)
+            return res

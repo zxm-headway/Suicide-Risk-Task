@@ -132,3 +132,35 @@ def splits(df, dist_values):
     
     df = df.reset_index(drop=True)
     return df, df_test
+
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma=2., reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # 计算 softmax 概率
+        logp = F.log_softmax(inputs, dim=1)
+        p = torch.exp(logp)
+        
+        # 将 targets 转换为 one-hot 编码
+        targets = torch.zeros_like(logp).scatter_(1, targets.unsqueeze(1), 1)
+        
+        # 计算每个类别的权重
+        if self.weight is not None:
+            self.weight = self.weight
+            logp = logp * self.weight
+        
+        # 计算 Focal Loss
+        loss = -1 * targets * (1 - p) ** self.gamma * logp  # 核心 focal loss 计算公式
+        
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
